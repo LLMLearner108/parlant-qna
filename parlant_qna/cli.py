@@ -34,7 +34,7 @@ from rich.progress import (
 )
 
 from parlant_qna.app import create_persistent_app
-from parlant_qna.server import create_server
+from parlant_qna.server import create_server, GLOBAL_TAG
 
 DEFAULT_PORT = 8807
 
@@ -114,16 +114,27 @@ def main() -> None:
     def server(port: int) -> None:
         asyncio.run(run_server(port))
 
+    # Modified: The ask method can now get tags optionally and use them to filter relevant context for answering a question
     @cli.command("ask", help="Ask a question")
     @click.argument("question", metavar="QUESTION")
+    @click.option(
+        "-t",
+        "--tags",
+        help="Tags associated with the question",
+        multiple=True,
+        required=False,
+    )
     @click.pass_context
-    def ask(ctx: click.Context, question: str) -> None:
-        response = get_client(ctx).post("/answers", json={"query": question})
+    def ask(ctx: click.Context, question: str, tags: tuple[str] = ()) -> None:
+        response = get_client(ctx).post(
+            "/answers", json={"query": question, "tags": list(tags)}
+        )
 
         die_if_error(response, "ask question")
 
         rich.print(response.json())
 
+    # Modified: There is a default tag which gets added to all the question answer pairs if no tags have been provided for it
     @cli.command("add", help="Add a question/answer pair")
     @click.option(
         "-q",
@@ -138,13 +149,28 @@ def main() -> None:
         help="Answer text",
         required=True,
     )
+    @click.option(
+        "-t",
+        "--tags",
+        help="List of tags associated with the question",
+        multiple=True,
+        required=False,
+    )
     @click.pass_context
-    def add(ctx: click.Context, variant: tuple[str], answer: str) -> None:
+    def add(
+        ctx: click.Context, variant: tuple[str], answer: str, tags: tuple[str] = ()
+    ) -> None:
+
+        # When no tags are provided, use the global tag
+        if len(tags) == 0:
+            tags = [GLOBAL_TAG]
+
         response = get_client(ctx).post(
             "/questions",
             json={
                 "variants": variant,
                 "answer": answer,
+                "tags": tags,
             },
         )
 
@@ -168,18 +194,26 @@ def main() -> None:
         "--answer",
         help="New answer text",
     )
+    @click.option(
+        "-t",
+        "--tags",
+        help="New list of tags" "NOTE: Providing this will override any existing tags.",
+        multiple=True,
+    )
     @click.pass_context
     def update(
         ctx: click.Context,
         id: str,
         variant: tuple[str],
         answer: str | None,
+        tags: tuple[str] | None,
     ) -> None:
         response = get_client(ctx).patch(
             f"/questions/{id}",
             json={
                 **({"variants": variant} if variant else {}),
                 **({"answer": answer} if answer else {}),
+                **({"tags": tags} if tags else {}),
             },
         )
 

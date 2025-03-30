@@ -17,8 +17,11 @@ import random
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+
+# ADDED: Additional field import to initialize the Question document with an empty list
+from dataclasses import field
 from pathlib import Path
-from typing import Any, Literal, Sequence, TypeAlias, cast, Optional
+from typing import Any, Literal, Sequence, TypeAlias, cast, Optional, List
 
 import aiofiles
 from parlant.adapters.db.json_file import JSONFileDocumentDatabase
@@ -35,11 +38,13 @@ from parlant.core.persistence.document_database import BaseDocument, DocumentDat
 from typing_extensions import Self
 
 
+# MODIFIED: Added a field called tags to permit manual filtering of context
 @dataclass(frozen=True)
 class Question:
     id: str
     variants: list[str]
     answer: str
+    tags: list[str] = field(default_factory=list)
 
 
 async def parse_md_file(file: Path) -> Question:
@@ -73,9 +78,11 @@ async def parse_md_file(file: Path) -> Question:
 AnswerGrade: TypeAlias = Literal["partial", "full", "no-answer"]
 
 
+# MODIFIED: Added a field called tags to permit manual filtering of context
 class _QuestionDocument(BaseDocument):
     variants: list[str]
     answer: str
+    tags: list[str] = field(default_factory=list)
 
 
 class _RelevantQuotes(DefaultBaseModel):
@@ -92,17 +99,17 @@ class _AnswerSchema(DefaultBaseModel):
     collected_relevant_quotes_from_background_info: Optional[list[_RelevantQuotes]] = (
         None
     )
-    concise_and_minimal_synthesized_answer_based_solely_on_relevant_quotes__draft: Optional[
-        str
-    ] = None
+    concise_and_minimal_synthesized_answer_based_solely_on_relevant_quotes__draft: (
+        Optional[str]
+    ) = (None)
     critique: Optional[str] = None
     brief_explanation_of_what_needs_to_change_in_order_to_stay_within_the_boundaries_of_collected_quotes: Optional[
         str
     ] = None
     could_use_better_markdown: Optional[bool] = None
-    concise_and_minimal_synthesized_answer_based_solely_on_relevant_quotes__revised: Optional[
-        str
-    ] = None
+    concise_and_minimal_synthesized_answer_based_solely_on_relevant_quotes__revised: (
+        Optional[str]
+    ) = (None)
     extracted_entities_found_in_background_info_and_referred_to_by_answer: Optional[
         list[str]
     ] = None
@@ -115,7 +122,9 @@ class _TestSchema(DefaultBaseModel):
     insights_and_evaluation_on_the_generated_answer_compared_to_the_original: str
     does_the_generated_answer_contain_hallucinations: bool
     detected_hallucination_explanation: Optional[str] = None
-    does_the_generated_answer_contain_any_facts_that_are_not_given_in_the_original_question_and_answer: bool
+    does_the_generated_answer_contain_any_facts_that_are_not_given_in_the_original_question_and_answer: (
+        bool
+    )
     does_the_generated_answer_provide_a_full_answer: bool
     does_the_generated_answer_provide_a_partial_answer: bool
 
@@ -137,7 +146,7 @@ class Reference:
 class Answer:
     content: Optional[str]
     grade: AnswerGrade
-    generation_info: GenerationInfo
+    generation_info: Optional[GenerationInfo]
     evaluation: str
     references: list[Reference]
     extracted_entities: list[str]
@@ -284,9 +293,7 @@ class App:
             assert "id" in q
 
             self._questions[q["id"]] = Question(
-                id=q["id"],
-                variants=q["variants"],
-                answer=q["answer"],
+                id=q["id"], variants=q["variants"], answer=q["answer"], tags=q["tags"]
             )
 
         self._task_service = await self._task_service.__aenter__()
@@ -301,11 +308,34 @@ class App:
     ) -> bool:
         return await self._task_service.__aexit__(exc_type, exc_value, traceback)
 
-    async def ask_question(self, question: str) -> Answer:
-        self.logger.info(
-            f'Looking for answer for "{question}" in {len(self._questions)} stored question(s)'
+    # MODIFIED: Additional argument called tags to allow the user to pass a set of tags and the ask question method will only use the questions tagged with these set of tags as relevant context
+    async def ask_question(
+        self, question: str, tags: Optional[list[str]] = None
+    ) -> Answer:
+        self.logger.debug(
+            f'\033[33m[ask_question] Looking up the answer for this user provided question: \n"{question}"\033[0m'
         )
-        background_info = self._format_background_info()
+
+        # If none of the provided tags is in the list of tags, return and do not give any answer. If some of the tags are present, then return without any answer
+        all_tags = await self.list_tags()
+        if tags:
+            if len(set(tags) & set(all_tags)) == 0:
+                return Answer(
+                    content=None,
+                    evaluation="None of the provided tags are present in the database",
+                    grade="no-answer",
+                    generation_info=None,
+                    references=[],
+                    extracted_entities=[],
+                )
+
+            absent_tags = set(tags) - set(all_tags)
+            self.logger.info(
+                f"\033[33m[ask_question] Out of the requested tags, we could not find any questions related to these tags: {absent_tags}. Hence skipping them.\033[0m"
+            )
+
+        # MODIFIED: _format_background_info now receives an argument called tags
+        background_info = self._format_background_info(tags)
 
         prompt = f"""\
 You are a RAG agent who has exactly one job: to answer the user's question
@@ -434,9 +464,15 @@ User Question: ###
 
         final_answer = None
 
-        if result.content.concise_and_minimal_synthesized_answer_based_solely_on_relevant_quotes__revised:
-            final_answer = result.content.concise_and_minimal_synthesized_answer_based_solely_on_relevant_quotes__revised
-        elif not result.content.brief_explanation_of_what_needs_to_change_in_order_to_stay_within_the_boundaries_of_collected_quotes:
+        if (
+            result.content.concise_and_minimal_synthesized_answer_based_solely_on_relevant_quotes__revised
+        ):
+            final_answer = (
+                result.content.concise_and_minimal_synthesized_answer_based_solely_on_relevant_quotes__revised
+            )
+        elif (
+            not result.content.brief_explanation_of_what_needs_to_change_in_order_to_stay_within_the_boundaries_of_collected_quotes
+        ):
             final_answer = (
                 result.content.concise_and_minimal_synthesized_answer_based_solely_on_relevant_quotes__draft
                 or None
@@ -448,7 +484,9 @@ User Question: ###
             self.logger.warning(
                 "Underlying LLM failed to generate a revised answer; falling back to draft"
             )
-            final_answer = result.content.concise_and_minimal_synthesized_answer_based_solely_on_relevant_quotes__draft
+            final_answer = (
+                result.content.concise_and_minimal_synthesized_answer_based_solely_on_relevant_quotes__draft
+            )
 
         answer = Answer(
             content=final_answer
@@ -477,10 +515,54 @@ User Question: ###
 
         return answer
 
-    def _format_background_info(self) -> str:
-        if not self._questions:
+    # ADDED: A function to filter the relevant context given a set of tags
+    def _filter_questions(self, tags: Optional[list[str]] = None):
+
+        filtered_questions = {}
+
+        # ASK: This should change after addition of the global tag, isn't it? Since now when we create a question we always by default provide the global tag, right?
+        # If there are no tags given then use questions which are global in nature i.e. untagged
+        if (tags is None) or len(tags) == 0:
+            self.logger.debug(
+                f"\033[33m[_filter_questions] Using questions which are global in nature i.e. untagged"
+            )
+
+            # Filter the questions which are untagged
+            for question_id, question in self._questions.items():
+                if len(question.tags) == 0:
+                    filtered_questions[question_id] = question
+
+        # If tags are actually provided for filtering the questions
+        else:
+            self.logger.debug(
+                f"\033[33m[_filter_questions] Received tags as a non-empty list. Filtering the questions based on tags"
+            )
+
+            for question_id, question in self._questions.items():
+                question_tags = question.tags
+                common_tags = set(question_tags) & set(tags)
+                if len(common_tags) > 0:
+                    filtered_questions[question_id] = question
+
+        self.logger.debug(
+            f"\033[33m[filter_questions] Before filtering: {len(self._questions)} | After filtering: {len(filtered_questions)}\033[0m"
+        )
+
+        # Print listed questions (first variant of every question) to the logger
+        qns = "\n\n".join([q.variants[0] for q in filtered_questions.values()])
+        self.logger.debug(f"\033[33mThese are the filtered questions:\n{qns}\033[0m")
+
+        return filtered_questions
+
+    # MODIFIED: _format_background_info now receives a list of tags and filters the relevant context before returning it to the ask_question using the private helper function filter_questions
+    def _format_background_info(self, tags: Optional[list[str]] = None) -> str:
+
+        filtered_questions = self._filter_questions(tags)
+
+        if not filtered_questions:
             return "DATA NOT AVAILABLE"
 
+        # MODIFIED: Used filtered questions and not self._questions for getting the context to be stuffed into the qna
         return "\n\n".join(
             [
                 f"""\
@@ -488,14 +570,13 @@ Question #{q.id}[variants={q.variants}][[
 Answer: {q.answer}
 ]]
 """
-                for q in self._questions.values()
+                for q in filtered_questions.values()
             ]
         )
 
+    # MODIFIED: Added tags as a parameter with default value of empty list
     async def create_question(
-        self,
-        variants: list[str],
-        answer: str,
+        self, variants: list[str], answer: str, tags: Optional[list[str]] = []
     ) -> Question:
         new_id = generate_id()
 
@@ -505,24 +586,23 @@ Answer: {q.answer}
                 version=self.VERSION,
                 variants=variants,
                 answer=answer,
+                tags=tags,
             )
         )
 
-        question = Question(
-            id=new_id,
-            variants=variants,
-            answer=answer,
-        )
+        question = Question(id=new_id, variants=variants, answer=answer, tags=tags)
 
         self._questions[question.id] = question
 
         return question
 
+    # MODIFIED: Added tags as a parameter with default value of empty list
     async def update_question(
         self,
         question_id: str,
         variants: Optional[list[str]] = None,
         answer: Optional[str] = None,
+        tags: Optional[list[str]] = [],
     ) -> Question:
         if question_id not in self._questions:
             raise KeyError()
@@ -534,6 +614,7 @@ Answer: {q.answer}
                 {
                     **({"variants": variants} if variants else {}),
                     **({"answer": answer} if answer else {}),
+                    **({"tags": tags} if tags else {}),
                 },
             ),
         )
@@ -544,6 +625,7 @@ Answer: {q.answer}
             id=question.id,
             variants=variants or question.variants,
             answer=answer or question.answer,
+            tags=tags or question.tags,
         )
 
         return await self.read_question(question_id)
@@ -556,6 +638,14 @@ Answer: {q.answer}
 
     async def list_questions(self) -> Sequence[Question]:
         return list(self._questions.values())
+
+    # ADDED: A function to list all the tags associated with the questions that we have in the bank so far
+    async def list_tags(self) -> List[str]:
+        all_tags = set()
+        for question in self._questions.values():
+            for tag in question.tags:
+                all_tags.add(tag)
+        return list(all_tags)
 
     async def delete_question(self, question_id: str) -> bool:
         if question_id in self._questions:
@@ -709,12 +799,14 @@ Answer: {q.answer}
                                     answer=answer,
                                     evaluation=result.content.insights_and_evaluation_on_the_generated_answer_compared_to_the_original,
                                     references_check_out=references_check_out,
-                                    hallucination=result.content.detected_hallucination_explanation
-                                    if (
-                                        result.content.does_the_generated_answer_contain_hallucinations
-                                        or result.content.does_the_generated_answer_contain_any_facts_that_are_not_given_in_the_original_question_and_answer
-                                    )
-                                    else None,
+                                    hallucination=(
+                                        result.content.detected_hallucination_explanation
+                                        if (
+                                            result.content.does_the_generated_answer_contain_hallucinations
+                                            or result.content.does_the_generated_answer_contain_any_facts_that_are_not_given_in_the_original_question_and_answer
+                                        )
+                                        else None
+                                    ),
                                 )
                             )
 

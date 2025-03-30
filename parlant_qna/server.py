@@ -14,25 +14,60 @@
 
 from dataclasses import asdict
 from functools import partial
-from typing import Awaitable, Callable, cast
+
+# MODIFIED: Added Optional and List imports from typing class
+from typing import Awaitable, Callable, cast, Optional, List, Annotated
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from parlant.sdk import PluginServer, ToolContext, ToolResult, tool
+from parlant.sdk import (
+    PluginServer,
+    ToolContext,
+    ToolResult,
+    tool,
+    ToolParameterOptions,
+)
 
 from parlant_qna.app import App
+
+# QUESTION: If the user wants to use all the questions without any filtering, this approach may not work as expected
+GLOBAL_TAG = "__global__"
+
+
+# ADDED: A function for the dynamic classification of tags based on the list of unique tags belonging to all the questions in the app
+async def get_choices(qna_app: App) -> List[str]:
+    tags = list(await qna_app.list_tags())
+    return tags
 
 
 def get_qna_app(context: ToolContext) -> App:
     return cast(App, context.plugin_data["qna_app"])
 
 
+# MODIFIED: Allow the user to pass a list of tags optionally in order to filter context for a certain query based on the tags
 @tool
-async def find_answer(context: ToolContext, query: str) -> ToolResult:
+async def find_answer(
+    context: ToolContext,
+    query: str,
+    tags: Annotated[
+        Optional[list[str]],
+        ToolParameterOptions(
+            description="A list of tags to which the given query can be tagged with",
+            source="context",
+            choice_provider=get_choices,
+        ),
+    ] = None,
+) -> ToolResult:
     qna_app = get_qna_app(context)
 
-    answer = await qna_app.ask_question(query)
+    qna_app.logger.debug(f"\033[33m Received/Inferred Tags: {tags}\033[0m")
+
+    # If the LLM came back with an empty list of tags or None then use the global tag
+    if not tags:
+        tags = [GLOBAL_TAG]
+
+    answer = await qna_app.ask_question(query, tags)
 
     return ToolResult(
         data=answer.content,
@@ -73,26 +108,33 @@ async def wrap_with_management_endpoints(qna_app: App, api: FastAPI) -> FastAPI:
                 content=[{"id": q.id, "title": q.variants[0]} for q in questions]
             )
 
+    # MODIFIED: Allow the user to create questions with tags
     @api.post("/questions")
     async def create_question(
-        variants: list[str] = Body(),
-        answer: str = Body(),
+        variants: list[str] = Body(), answer: str = Body(), tags: list[str] = Body()
     ) -> JSONResponse:
-        question = await qna_app.create_question(variants, answer)
+        # If not tags are provided, always use the global tag
+        if not tags:
+            tags = [GLOBAL_TAG]
+        question = await qna_app.create_question(variants, answer, tags)
 
         return JSONResponse(
             {"question_id": question.id},
             status_code=status.HTTP_201_CREATED,
         )
 
+    # MODIFIED: Allow the user to modify a question, allow them to modufy tags also
     @api.patch("/questions/{question_id}")
     async def patch_question(
         question_id: str,
         variants: list[str] | None = Body(default=None),
         answer: str | None = Body(default=None),
+        tags: list[str] | None = Body(default=None),
     ) -> JSONResponse:
         try:
-            question = await qna_app.update_question(question_id, variants, answer)
+            question = await qna_app.update_question(
+                question_id, variants, answer, tags
+            )
             return JSONResponse(content=asdict(question))
         except KeyError:
             raise HTTPException(
@@ -115,9 +157,16 @@ async def wrap_with_management_endpoints(qna_app: App, api: FastAPI) -> FastAPI:
     async def delete_question(question_id: str) -> None:
         await qna_app.delete_question(question_id)
 
+    # MODIFIED: Allow the user to pass tags to filter the context
     @api.post("/answers")
-    async def answer(query: str = Body(embed=True)) -> JSONResponse:
-        answer = await qna_app.ask_question(query)
+    async def answer(
+        query: str = Body(embed=True), tags: list[str] = Body(embed=True)
+    ) -> JSONResponse:
+        print("In the answers endpoint")
+        answer = await qna_app.ask_question(query, tags)
+
+        if (tags is None) or len(tags) == 0:
+            tags = [GLOBAL_TAG]
 
         return JSONResponse(
             {
