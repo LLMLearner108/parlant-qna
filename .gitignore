@@ -1,3 +1,5 @@
 /typings
 __pycache__
 /dist
+.env
+parlant_client-0.10.6-py3-none-any.whl
