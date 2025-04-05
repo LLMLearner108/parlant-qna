@@ -111,11 +111,14 @@ async def wrap_with_management_endpoints(qna_app: App, api: FastAPI) -> FastAPI:
     # MODIFIED: Allow the user to create questions with tags
     @api.post("/questions")
     async def create_question(
-        variants: list[str] = Body(), answer: str = Body(), tags: list[str] = Body()
+        variants: list[str] = Body(),
+        answer: str = Body(),
+        tags: Optional[list[str]] = Body(default=None),
     ) -> JSONResponse:
-        # If not tags are provided, always use the global tag
+        # If not tags are provided, always use the global tag, otherwise add the global tag to the list of tags
         if not tags:
             tags = [GLOBAL_TAG]
+
         question = await qna_app.create_question(variants, answer, tags)
 
         return JSONResponse(
@@ -160,14 +163,17 @@ async def wrap_with_management_endpoints(qna_app: App, api: FastAPI) -> FastAPI:
     # MODIFIED: Allow the user to pass tags to filter the context
     @api.post("/answers")
     async def answer(
-        query: str = Body(embed=True), tags: list[str] = Body(embed=True)
+        query: str = Body(embed=True),
+        tags: list[str] | None = Body(embed=True, default=None),
     ) -> JSONResponse:
         print("In the answers endpoint")
-        answer = await qna_app.ask_question(query, tags)
 
         if (tags is None) or len(tags) == 0:
             tags = [GLOBAL_TAG]
+        else:
+            tags = [GLOBAL_TAG] + tags
 
+        answer = await qna_app.ask_question(query, tags)
         return JSONResponse(
             {
                 "answer": answer.content,

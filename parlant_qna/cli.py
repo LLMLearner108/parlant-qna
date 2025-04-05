@@ -126,8 +126,13 @@ def main() -> None:
     )
     @click.pass_context
     def ask(ctx: click.Context, question: str, tags: tuple[str] = ()) -> None:
+        if len(tags) == 0:
+            tags = [GLOBAL_TAG]
+        else:
+            tags = [GLOBAL_TAG] + list(tags)
+
         response = get_client(ctx).post(
-            "/answers", json={"query": question, "tags": list(tags)}
+            "/answers", json={"query": question, "tags": tags}
         )
 
         die_if_error(response, "ask question")

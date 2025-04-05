@@ -21,7 +21,7 @@ from dataclasses import dataclass
 # ADDED: Additional field import to initialize the Question document with an empty list
 from dataclasses import field
 from pathlib import Path
-from typing import Any, Literal, Sequence, TypeAlias, cast, Optional, List
+from typing import Any, Literal, Sequence, TypeAlias, cast, Optional, List, Dict
 
 import aiofiles
 from parlant.adapters.db.json_file import JSONFileDocumentDatabase
@@ -253,6 +253,64 @@ class QNABackgroundTaskService(BackgroundTaskService):
     pass
 
 
+# ADDED: Abstracted the filtering of questions based on tags to a separate class
+class QuestionFilter:
+    def __init__(self, logger: Logger):
+        self.logger = logger
+
+    def filter_questions(
+        self, questions: Dict[str, Question], tags: Optional[list[str]] = None
+    ) -> Dict[str, Question]:
+        """
+        Filter questions based on provided tags.
+
+        Args:
+            questions: Dictionary of question_id to Question objects
+            tags: Optional list of tags to filter by. If None or empty, returns untagged questions.
+
+        Returns:
+            Dictionary of filtered questions
+        """
+        filtered_questions = {}
+
+        self.logger.debug(
+            f"\033[33m[QuestionFilter.filter_questions] Tags received for filtering: {tags}\033[0m"
+        )
+
+        # Fallback: If there are no tags provided for filtering, then use questions that do not have any tags
+        if (tags is None) or len(tags) == 0:
+            self.logger.debug(
+                f"\033[33m[QuestionFilter.filter_questions] Using questions that are untagged\033[0m"
+            )
+
+            # Filter the questions which are untagged
+            for question_id, question in questions.items():
+                if len(question.tags) == 0:
+                    filtered_questions[question_id] = question
+
+        # If tags are actually provided for filtering the questions
+        else:
+            self.logger.debug(
+                f"\033[33m[QuestionFilter.filter_questions] Received tags as a non-empty list. Filtering the questions based on tags\033[0m"
+            )
+
+            for question_id, question in questions.items():
+                question_tags = question.tags
+                common_tags = set(question_tags) & set(tags)
+                if len(common_tags) > 0:
+                    filtered_questions[question_id] = question
+
+        self.logger.debug(
+            f"\033[33m[QuestionFilter.filter_questions] Before filtering: {len(questions)} | After filtering: {len(filtered_questions)}\033[0m"
+        )
+
+        # Print the questions along with their variants to the logger
+        qns = "\n\n".join(["\n".join(q.variants) for q in filtered_questions.values()])
+        self.logger.debug(f"\033[33mThese are the filtered questions:\n{qns}\033[0m")
+
+        return filtered_questions
+
+
 class App:
     VERSION = Version.String("0.1.0")
 
@@ -265,6 +323,7 @@ class App:
         self._db = database
         self._service = service
         self.logger = logger
+        self._question_filter = QuestionFilter(logger)
 
         self._questions: dict[str, Question] = {}
         self._reports: dict[str, Report] = {}
@@ -515,54 +574,14 @@ User Question: ###
 
         return answer
 
-    # ADDED: A function to filter the relevant context given a set of tags
-    def _filter_questions(self, tags: Optional[list[str]] = None):
-
-        filtered_questions = {}
-
-        # ASK: This should change after addition of the global tag, isn't it? Since now when we create a question we always by default provide the global tag, right?
-        # If there are no tags given then use questions which are global in nature i.e. untagged
-        if (tags is None) or len(tags) == 0:
-            self.logger.debug(
-                f"\033[33m[_filter_questions] Using questions which are global in nature i.e. untagged"
-            )
-
-            # Filter the questions which are untagged
-            for question_id, question in self._questions.items():
-                if len(question.tags) == 0:
-                    filtered_questions[question_id] = question
-
-        # If tags are actually provided for filtering the questions
-        else:
-            self.logger.debug(
-                f"\033[33m[_filter_questions] Received tags as a non-empty list. Filtering the questions based on tags"
-            )
-
-            for question_id, question in self._questions.items():
-                question_tags = question.tags
-                common_tags = set(question_tags) & set(tags)
-                if len(common_tags) > 0:
-                    filtered_questions[question_id] = question
-
-        self.logger.debug(
-            f"\033[33m[filter_questions] Before filtering: {len(self._questions)} | After filtering: {len(filtered_questions)}\033[0m"
-        )
-
-        # Print listed questions (first variant of every question) to the logger
-        qns = "\n\n".join([q.variants[0] for q in filtered_questions.values()])
-        self.logger.debug(f"\033[33mThese are the filtered questions:\n{qns}\033[0m")
-
-        return filtered_questions
-
-    # MODIFIED: _format_background_info now receives a list of tags and filters the relevant context before returning it to the ask_question using the private helper function filter_questions
     def _format_background_info(self, tags: Optional[list[str]] = None) -> str:
-
-        filtered_questions = self._filter_questions(tags)
+        filtered_questions = self._question_filter.filter_questions(
+            self._questions, tags
+        )
 
         if not filtered_questions:
             return "DATA NOT AVAILABLE"
 
-        # MODIFIED: Used filtered questions and not self._questions for getting the context to be stuffed into the qna
         return "\n\n".join(
             [
                 f"""\

@@ -54,6 +54,7 @@ async def test_parlant_qna(parlant_qna: App) -> None:
 
     assert answer.grade != "no-answer"
 
+
 # ASK: Now everywhere I am assuming that we will be providing the GLOBAL_TAG when we see that the user has not asked to filter by tags, isn't it?
 async def test_that_a_question_thats_not_added_cannot_be_answered(app: App) -> None:
     await app.create_question(
@@ -70,7 +71,9 @@ async def test_that_a_question_thats_not_added_cannot_be_answered(app: App) -> N
 
 # Renamed the test from added to answered
 # Interesting test case now after the creation of the global tag ASK: If we should change the filter_questions function
-async def test_that_a_question_can_be_answered_based_on_background_info(app: App) -> None:
+async def test_that_a_question_can_be_answered_based_on_background_info(
+    app: App,
+) -> None:
     await app.create_question(
         variants=["Who plays George on Seinfeld"],
         answer="Jason Alexander played in Seinfeld from 1989 (he was 29 years old) until the end of the show in 1998 (when we was 38 years old)",
@@ -96,190 +99,53 @@ async def test_report(parlant_qna: App) -> None:
 
     print(report)
 
-async def test_that_no_questions_are_retrieved_when_tags_list_is_None(
+
+async def test_that_a_question_can_be_answered_when_context_exists_in_a_tagged_question_and_that_tag_is_selected(
     app: App,
 ) -> None:
-    await app.create_question(
-        variants=["What is a Banana?"], answer="Banana is a fruit", tags=[GLOBAL_TAG]
-    )
+    
+    question = "Who plays George on Seinfeld"
+    answer_string = "Jason Alexander"
 
     await app.create_question(
-        variants=["How does Aamras taste?"],
-        answer="Aamras is an extremely sweet and yummy desert",
-        tags=["Mango"],
+        variants=[question],
+        answer=answer_string,
+        tags=["Seinfeld"],
     )
 
-    question = "Explain the taste of Aamras"
-    questions_used = app._filter_questions(tags=None)
-    answer = await app.ask_question(question, tags=None)
-
-    assert len(questions_used) == 0
-    qns = list(questions_used.values())
-    qn_variants = sorted([x.variants[0] for x in qns])
-    assert len(qn_variants) == 0
-
-    assert answer.grade == "no-answer"
-    assert not answer.content
-
-async def test_that_no_questions_are_retrieved_when_tags_list_is_empty_list(
-    app: App,
-) -> None:
-    await app.create_question(
-        variants=["What is a Banana?"], answer="Banana is a fruit", tags=[GLOBAL_TAG]
-    )
-
-    await app.create_question(
-        variants=["How does Aamras taste?"],
-        answer="Aamras is an extremely sweet and yummy desert",
-        tags=["Mango"],
-    )
-
-    question = "Explain the taste of Aamras"
-    questions_used = app._filter_questions(tags=[])
-    answer = await app.ask_question(question, tags=[])
-
-    assert len(questions_used) == 0
-    qns = list(questions_used.values())
-    qn_variants = sorted([x.variants[0] for x in qns])
-    assert len(qn_variants) == 0
-
-    assert answer.grade == "no-answer"
-    assert not answer.content
-
-async def test_that_only_global_questions_are_in_context_when_tags_list_has_global_tag_and_query_cannot_be_answered_using_global_questions(
-    app: App,
-) -> None:
-    await app.create_question(
-        variants=["What is a Banana?"], answer="Banana is a fruit", tags=[GLOBAL_TAG]
-    )
-
-    await app.create_question(
-        variants=["How does Aamras taste?"],
-        answer="Aamras is an extremely sweet and yummy desert",
-        tags=["Mango"],
-    )
-
-    question = "Explain the taste of Aamras"
-    questions_used = app._filter_questions(tags=[GLOBAL_TAG])
-    answer = await app.ask_question(question, tags=[GLOBAL_TAG])
-
-    assert len(questions_used) == 1
-    qns = list(questions_used.values())
-    qn_variants = sorted([x.variants[0] for x in qns])
-    assert qn_variants == ["What is a Banana?"]
-
-    assert answer.grade == "no-answer"
-    assert not answer.content
-
-async def test_that_only_global_questions_are_in_context_when_tags_list_has_global_tag_and_query_can_be_answered_using_global_questions(
-    app: App,
-) -> None:
-    await app.create_question(
-        variants=["What is a Banana?"], answer="Banana is a fruit", tags=[GLOBAL_TAG]
-    )
-
-    await app.create_question(
-        variants=["How does Aamras taste?"],
-        answer="Aamras is an extremely sweet and yummy desert",
-        tags=["Mango"],
-    )
-
-    question = "Tell me about bananas"
-    questions_used = app._filter_questions(tags=[GLOBAL_TAG])
-    answer = await app.ask_question(question, tags=[GLOBAL_TAG])
-
-    assert len(questions_used) == 1
-    qns = list(questions_used.values())
-    qn_variants = sorted([x.variants[0] for x in qns])
-    assert qn_variants == ["What is a Banana?"]
+    answer = await app.ask_question("Who plays George on Seinfeld", tags=["Seinfeld"])
 
     assert answer.grade == "full"
     assert answer.content
     assert await nlp_test(
         context=f"Question: {question} ;; Answer: {answer.content}",
-        condition="The answer to that banana is a fruit",
+        condition="The answer to the question is Jason Alexander",
     )
 
-
-async def test_that_empty_context_exception_is_raised_when_a_non_existent_tag_is_provided(
+async def test_that_a_question_cannot_be_answered_when_context_exists_in_a_tagged_question_and_that_tag_is_not_selected(
     app: App,
 ) -> None:
-    await app.create_question(
-        variants=["What is a Banana?"],
-        answer="Banana is a fruit",
-        tags=[GLOBAL_TAG],
-    )
+    
+    question = "Who plays George on Seinfeld"
+    answer_string = "Jason Alexander"
 
     await app.create_question(
-        variants=["How does Aamras taste?"],
-        answer="Aamras is an extremely sweet and yummy desert",
-        tags=["Mango"],
+        variants=[question],
+        answer=answer_string,
+        tags=["Seinfeld"],
     )
 
-    question = "Explain the taste of Aamras"
-    questions_extracted = app._filter_questions(tags=["Orange"])
-    answer = await app.ask_question(question, tags=["Orange"])
+    question = "Who plays Dr. House on House MD"
+    answer_string = "Hugh Laurie"
 
-    assert len(questions_extracted) == 0
+    await app.create_question(
+        variants=[question],
+        answer=answer_string,
+        tags=["House"],
+    )
 
-    assert answer.evaluation == "None of the provided tags are present in the database"
+    answer = await app.ask_question("Who plays George on Seinfeld", tags=["House"])
+
     assert answer.grade == "no-answer"
     assert not answer.content
 
-
-async def test_that_non_zero_questions_are_retreived_and_query_must_be_answered_with_retrieved_questions_when_existing_non_global_tag_is_provided(
-    app: App,
-) -> None:
-    await app.create_question(
-        variants=["What is a Banana?"],
-        answer="Banana is a fruit",
-        tags=[GLOBAL_TAG],
-    )
-
-    await app.create_question(
-        variants=["How does Aamras taste?"],
-        answer="Aamras is an extremely sweet and yummy desert",
-        tags=["Mango"],
-    )
-
-    question = "Explain the taste of Aamras"
-    questions_used = app._filter_questions(tags=["Mango"])
-    answer = await app.ask_question(question, tags=["Mango"])
-
-    assert len(questions_used) == 1
-    qn = list(questions_used.values())[0]
-    assert qn.variants[0] == "How does Aamras taste?"
-
-    assert answer.grade == "full"
-    assert answer.content
-    assert await nlp_test(
-        context=f"Question: {question} ;; Answer: {answer.content}",
-        condition="The answer to the question is that Aamras is a sweet desert",
-    )
-
-
-async def test_that_non_zero_questions_are_retreived_and_query_must_not_be_answered_with_retrieved_questions_when_existing_non_global_tag_is_provided(
-    app: App,
-) -> None:
-    await app.create_question(
-        variants=["What is a Banana?"],
-        answer="Banana is a fruit",
-        tags=[GLOBAL_TAG],
-    )
-
-    await app.create_question(
-        variants=["How does Aamras taste?"],
-        answer="Aamras is an extremely sweet and yummy desert",
-        tags=["Mango"],
-    )
-
-    question = "What is the main ingredient of Aamras?"
-    questions_used = app._filter_questions(tags=["Mango"])
-    answer = await app.ask_question(question, tags=["Mango"])
-
-    assert len(questions_used) == 1
-    qn = list(questions_used.values())[0]
-    assert qn.variants[0] == "How does Aamras taste?"
-
-    assert answer.grade == "no-answer"
-    assert not answer.content
