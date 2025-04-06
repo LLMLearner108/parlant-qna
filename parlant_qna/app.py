@@ -17,6 +17,7 @@ import random
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from abc import ABC, abstractmethod
 
 # ADDED: Additional field import to initialize the Question document with an empty list
 from dataclasses import field
@@ -253,8 +254,17 @@ class QNABackgroundTaskService(BackgroundTaskService):
     pass
 
 
+
 # ADDED: Abstracted the filtering of questions based on tags to a separate class
-class QuestionFilter:
+class QuestionFilter(ABC):
+    @abstractmethod
+    def filter_questions(
+        self, questions: Dict[str, Question], tags: Optional[list[str]] = None
+    ) -> dict[str, Question]:
+        ...
+
+# Question Filter implementation can be extended to include more sophisticated filtering logic like when we introduce auto tags etc.
+class TagBasedQuestionFilter(QuestionFilter):
     def __init__(self, logger: Logger):
         self.logger = logger
 
@@ -319,11 +329,12 @@ class App:
         database: DocumentDatabase,
         service: NLPService,
         logger: Logger,
+        question_filter: QuestionFilter | None = None,
     ):
         self._db = database
         self._service = service
         self.logger = logger
-        self._question_filter = QuestionFilter(logger)
+        self._question_filter = question_filter or TagBasedQuestionFilter(logger)
 
         self._questions: dict[str, Question] = {}
         self._reports: dict[str, Report] = {}

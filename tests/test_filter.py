@@ -15,14 +15,14 @@
 from collections.abc import Iterator
 from pytest import fixture
 import logging
-from parlant_qna.app import QuestionFilter, Question
+from parlant_qna.app import QuestionFilter, Question, TagBasedQuestionFilter
 
 
 @fixture
 def question_filter() -> Iterator[QuestionFilter]:
     logger = logging.getLogger("test_filter")
     logger.setLevel(logging.DEBUG)
-    question_filter = QuestionFilter(logger=logger)
+    question_filter = TagBasedQuestionFilter(logger=logger)
     yield question_filter
 
 
